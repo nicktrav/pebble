@@ -7,6 +7,7 @@ package pebble
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/internal/base"
 	"github.com/cockroachdb/pebble/internal/datadriven"
@@ -98,6 +99,8 @@ zmemtbl        14    13 B
 }
 
 func TestMetrics(t *testing.T) {
+	t.Skip()
+
 	opts := &Options{
 		FS:                    vfs.NewMem(),
 		L0CompactionThreshold: 8,
@@ -204,6 +207,15 @@ func TestMetrics(t *testing.T) {
 
 		case "disk-usage":
 			return humanize.IEC.Uint64(d.Metrics().DiskSpaceUsage()).String()
+
+		case "sleep":
+			d, err := time.ParseDuration(td.Input)
+			if err != nil {
+				return err.Error()
+			}
+			fmt.Printf("sleeping for %s\n", d)
+			time.Sleep(d)
+			return ""
 
 		default:
 			return fmt.Sprintf("unknown command: %s", td.Cmd)
