@@ -49,14 +49,14 @@ zmemtbl         0     0 B
 iter-new a
 ----
 
+compact a-z
+----
+
 sleep
 10s
 ----
 
 iter-close a
-----
-
-compact a-z
 ----
 
 metrics

@@ -105,6 +105,7 @@ func TestMetrics(t *testing.T) {
 		FS:                    vfs.NewMem(),
 		L0CompactionThreshold: 8,
 	}
+	opts.private.disableAutomaticCompactions = true
 	d, err := Open("", opts)
 	require.NoError(t, err)
 	defer func() {
