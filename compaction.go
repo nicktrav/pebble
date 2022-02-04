@@ -2879,6 +2879,10 @@ func (d *DB) doDeleteObsoleteFiles(jobID int) {
 // Paces and eventually deletes the list of obsolete files passed in. db.mu
 // must NOT be held when calling this method.
 func (d *DB) paceAndDeleteObsoleteFiles(jobID int, files []obsoleteFile) {
+	// TODO(travers): could log deletion job start event here.
+	d.opts.EventListener.CleanupObsoleteFiles(ObsoleteFilesInfo{
+		JobID: jobID,
+	})
 	defer d.deleters.Done()
 	pacer := (pacer)(nilPacer)
 	if d.opts.Experimental.MinDeletionRate > 0 {

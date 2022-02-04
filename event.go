@@ -409,6 +409,20 @@ func (i WriteStallBeginInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	w.Printf("write stall beginning: %s", redact.Safe(i.Reason))
 }
 
+type ObsoleteFilesInfo struct {
+	JobID int
+	Files []obsoleteFile
+}
+
+func (i ObsoleteFilesInfo) String() string {
+	return redact.StringWithoutMarkers(i)
+}
+
+// SafeFormat implements redact.SafeFormatter.
+func (i ObsoleteFilesInfo) SafeFormat(w redact.SafePrinter, _ rune) {
+	w.Printf("[JOB %d] cleaning up %d obsolete files", redact.Safe(i.JobID), len(i.Files))
+}
+
 // EventListener contains a set of functions that will be invoked when various
 // significant DB events occur. Note that the functions should not run for an
 // excessive amount of time as they are invoked synchronously by the DB and may
@@ -418,6 +432,9 @@ type EventListener struct {
 	// BackgroundError is invoked whenever an error occurs during a background
 	// operation such as flush or compaction.
 	BackgroundError func(error)
+
+	// TODO
+	CleanupObsoleteFiles func(info ObsoleteFilesInfo)
 
 	// CompactionBegin is invoked after the inputs to a compaction have been
 	// determined, but before the compaction has produced any output.
@@ -494,6 +511,9 @@ func (l *EventListener) EnsureDefaults(logger Logger) {
 			l.BackgroundError = func(error) {}
 		}
 	}
+	if l.CleanupObsoleteFiles == nil {
+		l.CleanupObsoleteFiles = func(info ObsoleteFilesInfo) {}
+	}
 	if l.CompactionBegin == nil {
 		l.CompactionBegin = func(info CompactionInfo) {}
 	}
@@ -558,6 +578,9 @@ func MakeLoggingEventListener(logger Logger) EventListener {
 		BackgroundError: func(err error) {
 			logger.Infof("background error: %s", err)
 		},
+		CleanupObsoleteFiles: func(info ObsoleteFilesInfo) {
+			logger.Infof("%s", info)
+		},
 		CompactionBegin: func(info CompactionInfo) {
 			logger.Infof("%s", info)
 		},
@@ -620,6 +643,10 @@ func TeeEventListener(a, b EventListener) EventListener {
 		BackgroundError: func(err error) {
 			a.BackgroundError(err)
 			b.BackgroundError(err)
+		},
+		CleanupObsoleteFiles: func(info ObsoleteFilesInfo) {
+			a.CleanupObsoleteFiles(info)
+			b.CleanupObsoleteFiles(info)
 		},
 		CompactionBegin: func(info CompactionInfo) {
 			a.CompactionBegin(info)
