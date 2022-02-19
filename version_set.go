@@ -238,6 +238,28 @@ func (vs *versionSet) load(
 					errors.Safe(manifestFilename), dirname, errors.Safe(ve.ComparerName), errors.Safe(vs.cmpName))
 			}
 		}
+
+		// If the new files in the version edit contain range key bounds, these can
+		// affect the overall bounds for the table. We adjust the bounds on the
+		// table accordingly.
+		for _, f := range ve.NewFiles {
+			m := f.Meta
+			if m.SmallestPointKey.UserKey != nil {
+				m.Smallest = m.SmallestPointKey.Clone()
+			}
+			if m.SmallestRangeKey.UserKey != nil &&
+				base.InternalCompare(vs.cmp, m.SmallestRangeKey, m.Smallest) < 0 {
+				m.Smallest = m.SmallestRangeKey.Clone()
+			}
+			if m.LargestPointKey.UserKey != nil {
+				m.Largest = m.LargestPointKey.Clone()
+			}
+			if m.LargestRangeKey.UserKey != nil &&
+				base.InternalCompare(vs.cmp, m.LargestRangeKey, m.Largest) > 0 {
+				m.Largest = m.LargestRangeKey.Clone()
+			}
+		}
+
 		if err := bve.Accumulate(&ve); err != nil {
 			return err
 		}

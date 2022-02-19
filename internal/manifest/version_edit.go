@@ -48,11 +48,14 @@ const (
 	tagMaxColumnFamily  = 203
 
 	// The custom tags sub-format used by tagNewFile4.
-	customTagTerminate         = 1
-	customTagNeedsCompaction   = 2
-	customTagCreationTime      = 6
-	customTagPathID            = 65
+	customTagTerminate         = 1  // 0000 0001
+	customTagNeedsCompaction   = 2  // 0000 0010
+	customTagCreationTime      = 6  // 0000 0110
+	customTagPathID            = 65 // 0100 0001
 	customTagNonSafeIgnoreMask = 1 << 6
+
+	// Pebble tags.
+	tagNewFilePebble1 = 301
 )
 
 // DeletedFileEntry holds the state for a file deletion from a level. The file
@@ -173,7 +176,7 @@ func (v *VersionEdit) Decode(r io.Reader) error {
 			}
 			v.DeletedFiles[DeletedFileEntry{level, fileNum}] = nil
 
-		case tagNewFile, tagNewFile2, tagNewFile3, tagNewFile4:
+		case tagNewFile, tagNewFile2, tagNewFile3, tagNewFile4, tagNewFilePebble1:
 			level, err := d.readLevel()
 			if err != nil {
 				return err
@@ -193,14 +196,27 @@ func (v *VersionEdit) Decode(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			smallest, err := d.readBytes()
+			smallestPoint, err := d.readBytes()
 			if err != nil {
 				return err
 			}
-			largest, err := d.readBytes()
+			largestPoint, err := d.readBytes()
 			if err != nil {
 				return err
 			}
+
+			var smallestRange, largestRange []byte
+			if tag == tagNewFilePebble1 {
+				smallestRange, err = d.readBytes()
+				if err != nil {
+					return err
+				}
+				largestRange, err = d.readBytes()
+				if err != nil {
+					return err
+				}
+			}
+
 			var smallestSeqNum uint64
 			var largestSeqNum uint64
 			if tag != tagNewFile {
@@ -215,7 +231,9 @@ func (v *VersionEdit) Decode(r io.Reader) error {
 			}
 			var markedForCompaction bool
 			var creationTime uint64
-			if tag == tagNewFile4 {
+			// NB: newFilePebble1 is specific to Pebble, but builds on top of
+			// RocksDB's newFile4 tag.
+			if tag == tagNewFile4 || tag == tagNewFilePebble1 {
 				for {
 					customTag, err := d.readUvarint()
 					if err != nil {
@@ -252,18 +270,26 @@ func (v *VersionEdit) Decode(r io.Reader) error {
 					}
 				}
 			}
+			m := &FileMetadata{
+				FileNum:             fileNum,
+				Size:                size,
+				CreationTime:        int64(creationTime),
+				SmallestPointKey:    base.DecodeInternalKey(smallestPoint),
+				LargestPointKey:     base.DecodeInternalKey(largestPoint),
+				SmallestSeqNum:      smallestSeqNum,
+				LargestSeqNum:       largestSeqNum,
+				markedForCompaction: markedForCompaction,
+			}
+			// newFilePebble1 sets the smallest and largest range keys. Note that if
+			// the range key bounds would alter the bounds of the table, we need to
+			// handle this higher up, when we have a comparer available.
+			if tag == tagNewFilePebble1 {
+				m.SmallestRangeKey = base.DecodeInternalKey(smallestRange)
+				m.LargestRangeKey = base.DecodeInternalKey(largestRange)
+			}
 			v.NewFiles = append(v.NewFiles, NewFileEntry{
 				Level: level,
-				Meta: &FileMetadata{
-					FileNum:             fileNum,
-					Size:                size,
-					CreationTime:        int64(creationTime),
-					Smallest:            base.DecodeInternalKey(smallest),
-					Largest:             base.DecodeInternalKey(largest),
-					SmallestSeqNum:      smallestSeqNum,
-					LargestSeqNum:       largestSeqNum,
-					markedForCompaction: markedForCompaction,
-				},
+				Meta:  m,
 			})
 
 		case tagPrevLogNumber:
@@ -317,17 +343,28 @@ func (v *VersionEdit) Encode(w io.Writer) error {
 	}
 	for _, x := range v.NewFiles {
 		var customFields bool
+		var rangeKeys bool
 		if x.Meta.markedForCompaction || x.Meta.CreationTime != 0 {
 			customFields = true
-			e.writeUvarint(tagNewFile4)
+			if x.Meta.SmallestRangeKey.UserKey != nil &&
+				x.Meta.LargestRangeKey.UserKey != nil {
+				e.writeUvarint(tagNewFilePebble1)
+				rangeKeys = true
+			} else {
+				e.writeUvarint(tagNewFile4)
+			}
 		} else {
 			e.writeUvarint(tagNewFile2)
 		}
 		e.writeUvarint(uint64(x.Level))
 		e.writeUvarint(uint64(x.Meta.FileNum))
 		e.writeUvarint(x.Meta.Size)
-		e.writeKey(x.Meta.Smallest)
-		e.writeKey(x.Meta.Largest)
+		e.writeKey(x.Meta.SmallestPointKey)
+		e.writeKey(x.Meta.LargestPointKey)
+		if rangeKeys {
+			e.writeKey(x.Meta.SmallestRangeKey)
+			e.writeKey(x.Meta.LargestRangeKey)
+		}
 		e.writeUvarint(x.Meta.SmallestSeqNum)
 		e.writeUvarint(x.Meta.LargestSeqNum)
 		if customFields {
