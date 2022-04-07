@@ -502,3 +502,22 @@ overlaps level=0 start=acutc@6 end=zzhra@12 exclusive-end=true
 000991:[nwnmqtyvjt@5#4662,RANGEDEL-wmkrrxp@6#72057594037927935,RANGEDEL]
 000992:[wmkrrxp@6#4657,MERGE-yyquzcd@21#4624,SET]
 000993:[zslykqao@12#4636,SINGLEDEL-zzqwavxgrec@12#4627,DEL]
+
+# A trivial case of exclusive and non-exclusive endpoints in L0.
+define
+0:
+  000001:[a#0,SET-b#0,SET]
+  000002:[c#0,SET-c#0,SET]
+----
+0.0:
+  000001:[a#0,SET-b#0,SET]
+  000002:[c#0,SET-c#0,SET]
+
+overlaps level=0 start=a end=c exclusive-end=false
+----
+000001:[a#0,SET-b#0,SET]
+000002:[c#0,SET-c#0,SET]
+
+overlaps level=0 start=a end=c exclusive-end=true
+----
+000001:[a#0,SET-b#0,SET]

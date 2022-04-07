@@ -532,9 +532,9 @@ func overlaps(iter LevelIterator, cmp Compare, start, end []byte, exclusiveEnd b
 
 	// SeekGE compares user keys. The user key `start` may be equal to the
 	// f.Largest because f.Largest is a range deletion sentinel, indicating that
-	// the user key `start` is NOT contained within the file f. If that's the
-	// case, we can narrow the overlapping bounds to exclude the file with the
-	// sentinel.
+	// the user key `start` is NOT contained within the file f (as the deletion
+	// sentinel is interpreted as *exclusive*). If that's the case, we can narrow
+	// the overlapping bounds to exclude the file with the sentinel.
 	if f := startIter.Current(); f != nil && f.Largest.IsExclusiveSentinel() &&
 		cmp(f.Largest.UserKey, start) == 0 {
 		startIter.Next()
@@ -552,15 +552,28 @@ func overlaps(iter LevelIterator, cmp Compare, start, end []byte, exclusiveEnd b
 		}
 	}
 
-	// LevelSlice uses inclusive bounds, so if we seeked to the end sentinel
-	// or nexted too far because Largest.UserKey equaled `end`, go back.
+	// LevelSlice uses inclusive bounds, so if we seeked to the end sentinel or
+	// nexted too far because Largest.UserKey equaled `end`, go back.
 	//
-	// Consider !exclusiveEnd and end = 'f', with the following file bounds:
+	// Consider !exclusiveEnd and end = 'f', with the following file bounds for
+	// the following two cases (the iterator position is indicated with '*'):
 	//
-	//     [b,d] [e, f] [f, f] [g, h]
+	//   1) [b,d] [e, f] [f, f]
 	//
-	// the above for loop will Next until it arrives at [g, h]. We need to
-	// observe that g > f, and Prev to the file with bounds [f, f].
+	// The loop above will Next until it passes the final [f, f], becoming
+	// invalid. Prev to the file with bounds [f, f].
+	//
+	//   2) [b,d] [e, f] [f, f] [g, h]*
+	//
+	// The loop above will Next until it arrives at [g, h]. We need to observe
+	// that g > f, and Prev to the file with bounds [f, f].
+	//
+	// In the exclusiveEnd case, with end = 'f', we must also account for the
+	// following case:
+	//
+	//   [b,d] [f, f]*
+	//
+	// As the end key 'f' is exclusive, Prev to the file with bounds [b, d].
 	if !endIter.iter.valid() {
 		endIter.Prev()
 	} else if c := cmp(endIter.Current().Smallest.UserKey, end); c > 0 || c == 0 && exclusiveEnd {
@@ -826,90 +839,81 @@ func (v *Version) Contains(level int, cmp Compare, m *FileMetadata) bool {
 	return false
 }
 
+// TODO(travers): handle the exclusive end.
+func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd bool) LevelSlice {
+	// The L0 level btree is sorted by sequence number. Create a slice sorted by
+	// smallest key.
+	files := make([]*FileMetadata, lm.Len())
+	iter := lm.Iter()
+	for i, m := 0, iter.First(); m != nil; i, m = i+1, iter.Next() {
+		files[i] = m
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return cmp(files[i].Smallest.UserKey, files[j].Smallest.UserKey) < 0
+	})
+
+	// Outer loop: iterate over the files in order (files are ordered by their
+	// smallest key), constructing disjoint intervals.
+	var i int
+	var overlapping, intervalFiles []*FileMetadata
+	var m *FileMetadata
+	for i < len(files) {
+		m = files[i]
+		// The current file is beyond the bounds of the end key. Stop.
+		if cmp(m.Smallest.UserKey, end) > 0 {
+			break
+		}
+		// Inner loop: construct a disjoint interval, starting with the current
+		// file.
+		curStart, curEnd := m.Smallest.UserKey, m.Largest.UserKey
+		intervalFiles = append(intervalFiles[:0], m)
+		for i = i + 1; i < len(files); i++ {
+			m = files[i]
+			if cmp(m.Smallest.UserKey, curEnd) > 0 {
+				// We're at the start of the next interval. Break to finalize the
+				// current interval.
+				break
+			}
+			// Else we're still within this interval. Add the file and (potentially)
+			// extend the end key for the current interval.
+			intervalFiles = append(intervalFiles, m)
+			if cmp(m.Largest.UserKey, curEnd) > 0 {
+				curEnd = m.Largest.UserKey
+			}
+		}
+		// If the interval does not overlap, skip.
+		if cmp(curStart, end) > 0 || cmp(curEnd, start) < 0 || exclusiveEnd && cmp(curStart, end) == 0 {
+			continue
+		}
+		// Else, this interval overlaps. Add all the files to the tree.
+		overlapping = append(overlapping, intervalFiles...)
+		// NB: we already called next within the inner loop, so we're on the "next"
+		// file that starts the next interval. No need to call it again.
+	}
+	// Construct a B-Tree containing only the matching items.
+	// TODO(jackson): Avoid the oddity of constructing and immediately releasing a
+	// B-Tree. Make LevelSlice an interface?
+	tr, slice := makeBTree(lm.tree.cmp, overlapping)
+	defer tr.release()
+	return slice
+}
+
 // Overlaps returns all elements of v.files[level] whose user key range
-// intersects the inclusive range [start, end]. If level is non-zero then the
-// user key ranges of v.files[level] are assumed to not overlap (although they
-// may touch). If level is zero then that assumption cannot be made, and the
-// [start, end] range is expanded to the union of those matching ranges so far
-// and the computation is repeated until [start, end] stabilizes.
-// The returned files are a subsequence of the input files, i.e., the ordering
-// is not changed.
+// intersects the inclusive range [start, end], or the range with exclusive end
+// [start, end) if `exclusiveEnd` is true.
+//
+// If level is non-zero then the user key ranges of v.files[level] are assumed
+// to not overlap (although they may touch, as only the user key is considered).
+// If level is zero then that assumption cannot be made, and the start/end range
+// is expanded to the union of those matching ranges so far and the computation
+// is repeated until the start/end range stabilizes. The returned files are a
+// subsequence of the input files, i.e., the ordering is not changed.
 func (v *Version) Overlaps(
 	level int, cmp Compare, start, end []byte, exclusiveEnd bool,
 ) LevelSlice {
 	if level == 0 {
-		// Indices that have been selected as overlapping.
-		l0 := v.Levels[level]
-		l0Iter := l0.Iter()
-		selectedIndices := make([]bool, l0.Len())
-		numSelected := 0
-		var slice LevelSlice
-		for {
-			restart := false
-			for i, meta := 0, l0Iter.First(); meta != nil; i, meta = i+1, l0Iter.Next() {
-				selected := selectedIndices[i]
-				if selected {
-					continue
-				}
-				smallest := meta.Smallest.UserKey
-				largest := meta.Largest.UserKey
-				if c := cmp(largest, start); c < 0 || c == 0 && meta.Largest.IsExclusiveSentinel() {
-					// meta is completely before the specified range; skip it.
-					continue
-				}
-				if c := cmp(smallest, end); c > 0 || c == 0 && exclusiveEnd {
-					// meta is completely after the specified range; skip it.
-					continue
-				}
-				// Overlaps.
-				selectedIndices[i] = true
-				numSelected++
-
-				// Since level == 0, check if the newly added fileMetadata has
-				// expanded the range. We expand the range immediately for files
-				// we have remaining to check in this loop. All already checked
-				// and unselected files will need to be rechecked via the
-				// restart below.
-				if cmp(smallest, start) < 0 {
-					start = smallest
-					restart = true
-				}
-				if v := cmp(largest, end); v > 0 {
-					end = largest
-					exclusiveEnd = meta.Largest.IsExclusiveSentinel()
-					restart = true
-				} else if v == 0 && exclusiveEnd && !meta.Largest.IsExclusiveSentinel() {
-					// Only update the exclusivity of our existing `end`
-					// bound.
-					exclusiveEnd = false
-					restart = true
-				}
-			}
-
-			if !restart {
-				// Construct a B-Tree containing only the matching items.
-				var tr btree
-				tr.cmp = v.Levels[level].tree.cmp
-				for i, meta := 0, l0Iter.First(); meta != nil; i, meta = i+1, l0Iter.Next() {
-					if selectedIndices[i] {
-						err := tr.insert(meta)
-						if err != nil {
-							panic(err)
-						}
-					}
-				}
-				slice = LevelSlice{iter: tr.iter(), length: tr.length}
-				// TODO(jackson): Avoid the oddity of constructing and
-				// immediately releasing a B-Tree. Make LevelSlice an
-				// interface?
-				tr.release()
-				break
-			}
-			// Continue looping to retry the files that were not selected.
-		}
-		return slice
+		return l0Overlaps(v.Levels[level], cmp, start, end, exclusiveEnd)
 	}
-
 	return overlaps(v.Levels[level].Iter(), cmp, start, end, exclusiveEnd)
 }
 
