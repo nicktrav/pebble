@@ -507,53 +507,96 @@ overlaps level=0 start=acutc@6 end=zzhra@12 exclusive-end=true
 
 define
 0:
-  000001:[a#0,SET-b#0,SET]
-  000002:[c#0,SET-c#0,SET]
-  000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+  000001:[a#0,SET-c#0,SET]
+  000002:[b#0,SET-b#0,SET]
+  000003:[d#0,SET-e#1,SET]
   000004:[e#0,SET-e#0,SET]
+  000005:[f#0,SET-g#72057594037927935,RANGEDEL]
+  000006:[g#0,SET-g#0,SET]
+  000007:[h#0,SET-j#0,SET]
+  000008:[i#0,SET-j#0,SET]
+  000009:[k#0,SET-l#1,SET]
+  000010:[l#0,SET-l#0,SET]
 ----
+0.1:
+  000001:[a#0,SET-c#0,SET]
+  000003:[d#0,SET-e#1,SET]
+  000007:[h#0,SET-j#0,SET]
+  000009:[k#0,SET-l#1,SET]
 0.0:
-  000001:[a#0,SET-b#0,SET]
-  000002:[c#0,SET-c#0,SET]
-  000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+  000002:[b#0,SET-b#0,SET]
   000004:[e#0,SET-e#0,SET]
+  000005:[f#0,SET-g#72057594037927935,RANGEDEL]
+  000006:[g#0,SET-g#0,SET]
+  000008:[i#0,SET-j#0,SET]
+  000010:[l#0,SET-l#0,SET]
 
-# Inclusive bound pulls in [c, c].
+# An interval to the left of the lower bound can be included if its upper bound
+# completely overlaps with the lower bound, e.g. [a, c] overlaps with [b, b],
+# when start=end=b.
 
-overlaps level=0 start=a end=c exclusive-end=false
+overlaps level=0 start=b end=b exclusive-end=false
 ----
-000001:[a#0,SET-b#0,SET]
-000002:[c#0,SET-c#0,SET]
+000001:[a#0,SET-c#0,SET]
+000002:[b#0,SET-b#0,SET]
 
-# Exclusive bound does not pull in [c, c].
-
-overlaps level=0 start=a end=c exclusive-end=true
-----
-000001:[a#0,SET-b#0,SET]
-
-# The presence of the rangedel implies table 3's bounds are [d, e), which
-# prevents extending the overlap to table 4.
-
-overlaps level=0 start=d end=d exclusive-end=false
-----
-000003:[d#0,SET-e#72057594037927935,RANGEDEL]
-
-# An inclusive bound [d, e] pulls in both table 3 and 4.
-
-overlaps level=0 start=d end=e exclusive-end=false
-----
-000003:[d#0,SET-e#72057594037927935,RANGEDEL]
-000004:[e#0,SET-e#0,SET]
-
-# An exclusive bound [d, e) only pulls in table 3.
-
-overlaps level=0 start=d end=e exclusive-end=true
-----
-000003:[d#0,SET-e#72057594037927935,RANGEDEL]
-
-# The presence of the rangedel in table 3 makes its bounds [d, e), which
-# prevents overlap with table 4, which has bounds [e, e].
+# An interval to the left of the lower bound can be included if its upper bound
+# equals the lower bound, and the upper bound is not an exclusive sentinel, e.g.
+# [d, e] overlaps with [e, e], when start=end=e.
 
 overlaps level=0 start=e end=e exclusive-end=false
 ----
+000003:[d#0,SET-e#1,SET]
 000004:[e#0,SET-e#0,SET]
+
+# An interval to the left of the lower bound can NOT be included if its upper
+# bound equals the lower bound, and the upper bound IS an exclusive sentinel,
+# e.g. [f, g) does not overlap with [g, g] when start=end=g.
+
+overlaps level=0 start=g end=g exclusive-end=false
+----
+000006:[g#0,SET-g#0,SET]
+
+# An interval to the right of the upper bound can be included if its lower bound
+# completely overlaps with the upper bound, e.g. [i, j] overlaps with [h, j]
+# when start=end=h.
+
+overlaps level=0 start=h end=h exclusive-end=false
+----
+000007:[h#0,SET-j#0,SET]
+000008:[i#0,SET-j#0,SET]
+
+# An interval to the right of the upper bound can be included if its lower bound
+# equals the upper bound, and the upper bound is not exclusive, e.g.
+# [l, l] overlaps with [k, l] when start=end=k, exclusive=false.
+
+overlaps level=0 start=k end=k exclusive-end=false
+----
+000009:[k#0,SET-l#1,SET]
+000010:[l#0,SET-l#0,SET]
+
+# Similar to the previous case, an interval to the right of the upper bound can
+# be included if its lower bound equals the upper bound, even if the end bound
+# is exclusive, e.g. [l, l] does overlap with [k, l] when start=k end=l,
+# exclusive=true, as the lower bound on the former is equal to the upper bound
+# on the latter.
+
+overlaps level=0 start=k end=l exclusive-end=true
+----
+000009:[k#0,SET-l#1,SET]
+000010:[l#0,SET-l#0,SET]
+
+# If the upper bound is provided as exclusive, tables that have that as a lower
+# bound are not merged, e.g. [g, g] and [h, j] will not merge as the bound is
+# [g, h), which prevents consideration of the latter.
+overlaps level=0 start=g end=h exclusive-end=true
+----
+000006:[g#0,SET-g#0,SET]
+
+# An interval to the right of the upper bound can NOT be included if its lower
+# bound equals the lower upper, and the upper bound IS an exclusive sentinel,
+# e.g. [f, g) does not overlap with [g, g] when start=end=f.
+
+overlaps level=0 start=f end=f exclusive-end=false
+----
+000005:[f#0,SET-g#72057594037927935,RANGEDEL]
