@@ -858,8 +858,10 @@ func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd b
 	// smallest key), constructing disjoint intervals.
 	var overlapping, intervalFiles []*FileMetadata
 	for m := iter.First(); m != nil; {
-		// The current file is beyond the bounds of the end key. Stop.
-		if cmp(m.Smallest.UserKey, end) > 0 {
+		// The current file is beyond the bounds of the end key. As all subsequent
+		// files sort after this one, avoid the extra work and stop here.
+		// NB: this isn't required for correctness, it's just an optimization.
+		if c := cmp(m.Smallest.UserKey, end); c > 0 || c == 0 && exclusiveEnd {
 			break
 		}
 		// Inner loop: construct a disjoint interval, starting with the current
@@ -879,11 +881,14 @@ func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd b
 				curEnd = m.Largest.UserKey
 			}
 		}
-		// If the interval does not overlap, skip.
-		if cmp(curStart, end) > 0 || cmp(curEnd, start) < 0 || exclusiveEnd && cmp(curStart, end) == 0 {
+		if cmp(curEnd, start) < 0 {
+			// This interval lies before the desired interval. Skip.
+			continue
+		} else if c := cmp(curStart, end); c > 0 || c == 0 && exclusiveEnd {
+			// This interval lies after the desired interval. Skip.
 			continue
 		}
-		// Else, this interval overlaps. Add all the files to the tree.
+		// Else, this interval overlaps. Retain the files in this current interval.
 		overlapping = append(overlapping, intervalFiles...)
 		// NB: we already called next within the inner loop, so we're on the "next"
 		// file that starts the next interval. No need to call it again.
