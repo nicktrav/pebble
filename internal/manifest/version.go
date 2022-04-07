@@ -865,11 +865,12 @@ func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd b
 			break
 		}
 		// Inner loop: construct a disjoint interval, starting with the current
-		// file.
+		// file. Note that this inner loop has its own "exclusivity" indicator.
 		curStart, curEnd := m.Smallest.UserKey, m.Largest.UserKey
+		curExclusive := m.Largest.IsExclusiveSentinel()
 		intervalFiles = append(intervalFiles[:0], m)
 		for m = iter.Next(); m != nil; m = iter.Next() {
-			if cmp(m.Smallest.UserKey, curEnd) > 0 {
+			if c := cmp(m.Smallest.UserKey, curEnd); c > 0 || c == 0 && curExclusive {
 				// We're at the start of the next interval. Break to finalize the
 				// current interval.
 				break
@@ -877,11 +878,22 @@ func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd b
 			// Else we're still within this interval. Add the file and (potentially)
 			// extend the end key for the current interval.
 			intervalFiles = append(intervalFiles, m)
-			if cmp(m.Largest.UserKey, curEnd) > 0 {
+			if c := cmp(m.Largest.UserKey, curEnd); c > 0 {
 				curEnd = m.Largest.UserKey
+				// Carry forward the exclusivity from the key we're using to extend.
+				curExclusive = m.Largest.IsExclusiveSentinel()
+			} else if c == 0 && curExclusive && !m.Largest.IsExclusiveSentinel() {
+				// The current end bound for the interval is exclusive, and the largest
+				// key in the current file has the same user key. If this file's largest
+				// key is not an exclusive sentinel, we must extend the bound to become
+				// inclusive.
+				// For example: if the current bounds for the interval are [x, y), and
+				// this file has bounds [x, y], then the resultant bounds become [x, y],
+				// as the latter is a superset of the former.
+				curExclusive = false
 			}
 		}
-		if cmp(curEnd, start) < 0 {
+		if c := cmp(curEnd, start); c < 0 || c == 0 && curExclusive {
 			// This interval lies before the desired interval. Skip.
 			continue
 		} else if c := cmp(curStart, end); c > 0 || c == 0 && exclusiveEnd {

@@ -503,21 +503,57 @@ overlaps level=0 start=acutc@6 end=zzhra@12 exclusive-end=true
 000992:[wmkrrxp@6#4657,MERGE-yyquzcd@21#4624,SET]
 000993:[zslykqao@12#4636,SINGLEDEL-zzqwavxgrec@12#4627,DEL]
 
-# A trivial case of exclusive and non-exclusive endpoints in L0.
+# Additional test cases to exercise exclusive and non-exclusive end bound in L0.
+
 define
 0:
   000001:[a#0,SET-b#0,SET]
   000002:[c#0,SET-c#0,SET]
+  000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+  000004:[e#0,SET-e#0,SET]
 ----
 0.0:
   000001:[a#0,SET-b#0,SET]
   000002:[c#0,SET-c#0,SET]
+  000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+  000004:[e#0,SET-e#0,SET]
+
+# Inclusive bound pulls in [c, c].
 
 overlaps level=0 start=a end=c exclusive-end=false
 ----
 000001:[a#0,SET-b#0,SET]
 000002:[c#0,SET-c#0,SET]
 
+# Exclusive bound does not pull in [c, c].
+
 overlaps level=0 start=a end=c exclusive-end=true
 ----
 000001:[a#0,SET-b#0,SET]
+
+# The presence of the rangedel implies table 3's bounds are [d, e), which
+# prevents extending the overlap to table 4.
+
+overlaps level=0 start=d end=d exclusive-end=false
+----
+000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+
+# An inclusive bound [d, e] pulls in both table 3 and 4.
+
+overlaps level=0 start=d end=e exclusive-end=false
+----
+000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+000004:[e#0,SET-e#0,SET]
+
+# An exclusive bound [d, e) only pulls in table 3.
+
+overlaps level=0 start=d end=e exclusive-end=true
+----
+000003:[d#0,SET-e#72057594037927935,RANGEDEL]
+
+# The presence of the rangedel in table 3 makes its bounds [d, e), which
+# prevents overlap with table 4, which has bounds [e, e].
+
+overlaps level=0 start=e end=e exclusive-end=false
+----
+000004:[e#0,SET-e#0,SET]
