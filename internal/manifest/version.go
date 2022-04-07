@@ -839,26 +839,25 @@ func (v *Version) Contains(level int, cmp Compare, m *FileMetadata) bool {
 	return false
 }
 
-// TODO(travers): handle the exclusive end.
 func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd bool) LevelSlice {
-	// The L0 level btree is sorted by sequence number. Create a slice sorted by
-	// smallest key.
-	files := make([]*FileMetadata, lm.Len())
+	// The L0 level B-Tree is sorted by sequence number. Create a new B-Tree
+	// sorted by smallest key.
+	var tr btree
+	defer tr.release()
+	tr.cmp = btreeCmpSmallestKey(cmp)
 	iter := lm.Iter()
-	for i, m := 0, iter.First(); m != nil; i, m = i+1, iter.Next() {
-		files[i] = m
+	for m := iter.First(); m != nil; m = iter.Next() {
+		if err := tr.insert(m); err != nil {
+			panic(err)
+		}
 	}
-	sort.Slice(files, func(i, j int) bool {
-		return cmp(files[i].Smallest.UserKey, files[j].Smallest.UserKey) < 0
-	})
+	s := LevelSlice{iter: tr.iter(), length: tr.length}
+	iter = s.Iter()
 
 	// Outer loop: iterate over the files in order (files are ordered by their
 	// smallest key), constructing disjoint intervals.
-	var i int
 	var overlapping, intervalFiles []*FileMetadata
-	var m *FileMetadata
-	for i < len(files) {
-		m = files[i]
+	for m := iter.First(); m != nil; {
 		// The current file is beyond the bounds of the end key. Stop.
 		if cmp(m.Smallest.UserKey, end) > 0 {
 			break
@@ -867,8 +866,7 @@ func l0Overlaps(lm LevelMetadata, cmp Compare, start, end []byte, exclusiveEnd b
 		// file.
 		curStart, curEnd := m.Smallest.UserKey, m.Largest.UserKey
 		intervalFiles = append(intervalFiles[:0], m)
-		for i = i + 1; i < len(files); i++ {
-			m = files[i]
+		for m = iter.Next(); m != nil; m = iter.Next() {
 			if cmp(m.Smallest.UserKey, curEnd) > 0 {
 				// We're at the start of the next interval. Break to finalize the
 				// current interval.
