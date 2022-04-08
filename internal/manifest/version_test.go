@@ -7,6 +7,9 @@ package manifest
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
+	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +91,144 @@ func TestIkeyRange(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("KeyRange(%q) = %q, %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func BenchmarkL0Overlaps_Random(b *testing.B) {
+	cmp := base.DefaultComparer.Compare
+	seed := int64(1649432491)
+	rng := rand.New(rand.NewSource(seed))
+	keyspace := testkeys.Alpha(10)
+
+	type params struct {
+		lm                LevelMetadata
+		smallest, largest []byte
+	}
+
+	makeParams := func(n int) params {
+		files := make([]*FileMetadata, n)
+
+		for i := range files {
+			m := &FileMetadata{
+				FileNum: base.FileNum(i),
+			}
+			smallest := testkeys.Key(keyspace, rng.Intn(keyspace.MaxLen()))
+			largest := testkeys.Key(keyspace, rng.Intn(keyspace.MaxLen()))
+			if cmp(smallest, largest) > 0 {
+				smallest, largest = largest, smallest
+			}
+			smallestKey := base.MakeInternalKey(smallest, 0, base.InternalKeyKindSet)
+			largestKey := base.MakeInternalKey(largest, 0, base.InternalKeyKindSet)
+			m.ExtendPointKeyBounds(cmp, smallestKey, largestKey)
+			files[i] = m
+		}
+
+		// Pick a random bounds.
+		smallest := testkeys.Key(keyspace, rng.Intn(keyspace.MaxLen()))
+		largest := testkeys.Key(keyspace, rng.Intn(keyspace.MaxLen()))
+		if cmp(smallest, largest) > 0 {
+			smallest, largest = largest, smallest
+		}
+
+		lm := makeLevelMetadata(cmp, 0, files)
+
+		return params{lm, smallest, largest}
+	}
+
+	// Construct the test params.
+	fileCounts := []int{10, 25, 50, 100, 1000}
+	//fileCounts := []int{10}
+	for _, c := range fileCounts {
+		name := fmt.Sprintf("count=%d", c)
+		b.Run(name, func(b *testing.B) {
+			pprofPath := fmt.Sprintf("/tmp/%s.pprof", name)
+			w, err := os.OpenFile(pprofPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+			if err != nil {
+				b.Fatal(err)
+			}
+			var ps []params
+			for i := 0; i < b.N; i++ {
+				ps = append(ps, makeParams(c))
+			}
+			err = pprof.StartCPUProfile(w)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				p := ps[i]
+				_ = l0Overlaps(p.lm, base.DefaultComparer.Compare, p.smallest, p.largest, rng.Intn(2) == 0)
+			}
+			pprof.StopCPUProfile()
+		})
+	}
+}
+
+func BenchmarkL0Overlaps_WorstCase(b *testing.B) {
+	// Construct a worst-case L0, that resembles the following, but scaled out to
+	// a wider keyspace. The upper bounds on each file are *exclusive* (i.e.
+	// exclusive sentinel keys). The numbers inside the boxes indicate iteration
+	// order within L0.
+	//
+	// The original algorithm was iterative. Starting with file 001, no files
+	// overlap until files 020 and 021, the bounds would extend, and the loop
+	// would need to repeat. The next loop iteration picks up 002 and 003, and 018
+	// and 019, and the loop repeats. The loop continues until all files are
+	// chosen.
+	//
+	//                    |019|020|
+	//                |017|       |018|
+	//            |015|               |016|
+	//        |013|                       |014|
+	//    |011|                               |012|
+	//  |009|                                   |010|
+	//      |007|                           |008|
+	//          |005|                   |006|
+	//              |003|           |004|
+	//                  |001|   |002|
+	//                      |000|
+	//  a   c   e   g   i   k   m   o   q   s   u   w
+	//                      |   |
+	//  0   2   4   6   8   10  12  14  16  18  20  22
+
+	makeMetadata := func(nChars int) (LevelMetadata, []byte) {
+		nFiles := nChars - 2
+
+		alpha := testkeys.Alpha(10)
+		key := func(i int) []byte {
+			return testkeys.Key(alpha, i)
+		}
+
+		makeFile := func(start, end []byte, filenum int) *FileMetadata {
+			m := &FileMetadata{FileNum: base.FileNum(filenum)}
+			sKey := base.MakeInternalKey(start, 0, base.InternalKeyKindSet)
+			eKey := base.MakeExclusiveSentinelKey(base.InternalKeyKindRangeDelete, end)
+			m.ExtendPointKeyBounds(base.DefaultComparer.Compare, sKey, eKey)
+			return m
+		}
+
+		files := make([]*FileMetadata, nFiles)
+		files[0] = makeFile(key(nChars/2-1), key(nChars/2+1), 0)
+		for i := 0; i < (nFiles-1)/4; i++ {
+			files[2*i+1] = makeFile(key(nChars/2-2*i-3), key(nChars/2-2*i-1), 2*i+1)             // Bottom left.
+			files[2*i+2] = makeFile(key(nChars/2+2*i+1), key(nChars/2+2*i+3), 2*i+2)             // Bottom right.
+			files[nFiles-2*i-2] = makeFile(key(nChars/2-2*i-2), key(nChars/2-2*i), nFiles-2*i-2) // Top left.
+			files[nFiles-2*i-1] = makeFile(key(nChars/2+2*i), key(nChars/2+2*i+2), nFiles-2*i-1) // Top right.
+		}
+
+		return makeLevelMetadata(base.DefaultComparer.Compare, 0, files), key(nChars / 2)
+	}
+
+	charCounts := []int{7, 11, 15, 19, 23, 207, 407, 4007}
+	for _, c := range charCounts {
+		b.Run(fmt.Sprintf("chars=%d", c), func(b *testing.B) {
+			lm, mid := makeMetadata(c)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				s := l0Overlaps(lm, base.DefaultComparer.Compare, mid, mid, false)
+				require.Equal(b, c-2, s.length)
+			}
+		})
 	}
 }
 
