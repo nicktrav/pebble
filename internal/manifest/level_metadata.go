@@ -204,8 +204,17 @@ func (ls *LevelSlice) Iter() LevelIterator {
 	}
 }
 
-// Len returns the number of files in the slice. Its runtime is constant.
+// Len returns the number of files in the slice. Its runtime is linear the first
+// in the length of the slice. The length cached after the first call to Len.
 func (ls *LevelSlice) Len() int {
+	if ls.length > 0 {
+		return ls.length
+	} else if ls.Empty() {
+		return 0
+	}
+	ls.Each(func(_ *FileMetadata) {
+		ls.length++
+	})
 	return ls.length
 }
 
