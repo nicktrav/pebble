@@ -985,6 +985,7 @@ type fragmentBlockIter struct {
 	err       error
 	dir       int8
 	closeHook func(i keyspan.FragmentIterator) error
+	filterFn  func(k *InternalKey) bool
 }
 
 func (i *fragmentBlockIter) decodeSpanKeys(k *InternalKey, internalValue []byte) {
@@ -1007,6 +1008,30 @@ func (i *fragmentBlockIter) decodeSpanKeys(k *InternalKey, internalValue []byte)
 		i.span = keyspan.Span{}
 		i.err = base.CorruptionErrorf("pebble: corrupt keyspan fragment of kind %d", k.Kind())
 	}
+}
+
+// maybeSkipForward skips keys in a forward direction that do not match the
+// filter function, if provided.
+func (i *fragmentBlockIter) maybeSkipForward(k *InternalKey, v []byte) (*InternalKey, []byte) {
+	if i.filterFn == nil {
+		return k, v
+	}
+	for i.blockIter.valid() && !i.filterFn(k) {
+		k, v = i.blockIter.Next()
+	}
+	return k, v
+}
+
+// maybeSkipBackward skips keys in the reverse direction that do not match the
+// filter function, if provided.
+func (i *fragmentBlockIter) maybeSkipBackward(k *InternalKey, v []byte) (*InternalKey, []byte) {
+	if i.filterFn == nil {
+		return k, v
+	}
+	for i.blockIter.valid() && !i.filterFn(k) {
+		k, v = i.blockIter.Prev()
+	}
+	return k, v
 }
 
 // gatherForward gathers internal keys with identical bounds. Keys defined over
@@ -1037,7 +1062,7 @@ func (i *fragmentBlockIter) gatherForward(k *InternalKey, internalValue []byte) 
 	// There might exist additional internal keys with identical bounds encoded
 	// within the block. Iterate forward, accumulating all the keys with
 	// identical bounds to s.
-	k, internalValue = i.blockIter.Next()
+	k, internalValue = i.maybeSkipForward(i.blockIter.Next())
 	for k != nil && i.blockIter.cmp(k.UserKey, i.span.Start) == 0 {
 		i.decodeSpanKeys(k, internalValue)
 		if i.err != nil {
@@ -1053,7 +1078,7 @@ func (i *fragmentBlockIter) gatherForward(k *InternalKey, internalValue []byte) 
 			i.span = keyspan.Span{}
 			return i.span
 		}
-		k, internalValue = i.blockIter.Next()
+		k, internalValue = i.maybeSkipForward(i.blockIter.Next())
 	}
 	// i.blockIter is positioned over the first internal key for the next span.
 	return i.span
@@ -1087,7 +1112,7 @@ func (i *fragmentBlockIter) gatherBackward(k *InternalKey, internalValue []byte)
 	// There might exist additional internal keys with identical bounds encoded
 	// within the block. Iterate backward, accumulating all the keys with
 	// identical bounds to s.
-	k, internalValue = i.blockIter.Prev()
+	k, internalValue = i.maybeSkipBackward(i.blockIter.Prev())
 	for k != nil && i.blockIter.cmp(k.UserKey, i.span.Start) == 0 {
 		i.decodeSpanKeys(k, internalValue)
 		if i.err != nil {
@@ -1103,7 +1128,7 @@ func (i *fragmentBlockIter) gatherBackward(k *InternalKey, internalValue []byte)
 			i.span = keyspan.Span{}
 			return i.span
 		}
-		k, internalValue = i.blockIter.Prev()
+		k, internalValue = i.maybeSkipBackward(i.blockIter.Prev())
 	}
 	// i.blockIter is positioned over the last internal key for the previous
 	// span.
@@ -1142,14 +1167,14 @@ func (i *fragmentBlockIter) Close() error {
 // internal/base package.
 func (i *fragmentBlockIter) First() keyspan.Span {
 	i.dir = +1
-	return i.gatherForward(i.blockIter.First())
+	return i.gatherForward(i.maybeSkipForward(i.blockIter.First()))
 }
 
 // Last implements (base.InternalIterator).Last, as documented in the
 // internal/base package.
 func (i *fragmentBlockIter) Last() keyspan.Span {
 	i.dir = -1
-	return i.gatherBackward(i.blockIter.Last())
+	return i.gatherBackward(i.maybeSkipBackward(i.blockIter.Last()))
 }
 
 // Next implements (base.InternalIterator).Next, as documented in the
@@ -1178,7 +1203,7 @@ func (i *fragmentBlockIter) Next() keyspan.Span {
 		//    ... [a,b) [b,c) [b,c) [b,c) [d,e) ...
 		//          ^                       ^
 		//     i.blockIter                 want
-		if x := i.gatherForward(i.blockIter.Next()); invariants.Enabled && !x.Valid() {
+		if x := i.gatherForward(i.maybeSkipForward(i.blockIter.Next())); invariants.Enabled && !x.Valid() {
 			panic("pebble: invariant violation: next entry unexpectedly invalid")
 		}
 		i.dir = +1
@@ -1212,7 +1237,7 @@ func (i *fragmentBlockIter) Prev() keyspan.Span {
 		//    ... [a,b) [b,c) [b,c) [b,c) [d,e) ...
 		//          ^                       ^
 		//        want                  i.blockIter
-		if x := i.gatherBackward(i.blockIter.Prev()); invariants.Enabled && !x.Valid() {
+		if x := i.gatherBackward(i.maybeSkipBackward(i.blockIter.Prev())); invariants.Enabled && !x.Valid() {
 			panic("pebble: invariant violation: previous entry unexpectedly invalid")
 		}
 		i.dir = -1
@@ -1224,14 +1249,14 @@ func (i *fragmentBlockIter) Prev() keyspan.Span {
 // internal/base package.
 func (i *fragmentBlockIter) SeekGE(k []byte) keyspan.Span {
 	i.dir = +1
-	return i.gatherForward(i.blockIter.SeekGE(k, false))
+	return i.gatherForward(i.maybeSkipForward(i.blockIter.SeekGE(k, false)))
 }
 
 // SeekLT implements (base.InternalIterator).SeekLT, as documented in the
 // internal/base package.
 func (i *fragmentBlockIter) SeekLT(k []byte) keyspan.Span {
 	i.dir = -1
-	return i.gatherBackward(i.blockIter.SeekLT(k))
+	return i.gatherBackward(i.maybeSkipBackward(i.blockIter.SeekLT(k)))
 }
 
 // SetBounds implements (base.InternalIterator).SetBounds, as documented

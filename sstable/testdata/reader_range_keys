@@ -1,0 +1,40 @@
+build
+SET a-c @1=foo
+SET c-d @2=bar
+SET e-f @3=baz
+----
+
+scan
+----
+a-c:{(#0,RANGEKEYSET,@1,foo)}
+c-d:{(#0,RANGEKEYSET,@2,bar)}
+e-f:{(#0,RANGEKEYSET,@3,baz)}
+
+build
+SET a-c @1=foo
+UNSET c-d @2=bar
+DEL e-f
+----
+
+scan
+----
+a-c:{(#0,RANGEKEYSET,@1,foo)}
+c-d:{(#0,RANGEKEYUNSET,@2=bar)}
+e-f:{(#0,RANGEKEYDEL)}
+
+scan filter-key-kinds=(range-key-set)
+----
+a-c:{(#0,RANGEKEYSET,@1,foo)}
+
+scan filter-key-kinds=(range-key-unset)
+----
+c-d:{(#0,RANGEKEYUNSET,@2=bar)}
+
+scan filter-key-kinds=(range-key-del)
+----
+e-f:{(#0,RANGEKEYDEL)}
+
+scan filter-key-kinds=(range-key-set,range-key-unset)
+----
+a-c:{(#0,RANGEKEYSET,@1,foo)}
+c-d:{(#0,RANGEKEYUNSET,@2=bar)}

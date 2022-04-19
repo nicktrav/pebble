@@ -2212,6 +2212,10 @@ func (r *Reader) NewRawRangeDelIter() (keyspan.FragmentIterator, error) {
 // range-key block for the table. Returns nil if the table does not contain any
 // range keys.
 func (r *Reader) NewRawRangeKeyIter() (FragmentIterator, error) {
+	return r.NewRawRangeKeyIterFilter(nil)
+}
+
+func (r *Reader) NewRawRangeKeyIterFilter(filterFn func(k *InternalKey) bool) (FragmentIterator, error) {
 	if r.rangeKeyBH.Length == 0 {
 		return nil, nil
 	}
@@ -2219,7 +2223,7 @@ func (r *Reader) NewRawRangeKeyIter() (FragmentIterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &fragmentBlockIter{}
+	i := &fragmentBlockIter{filterFn: filterFn}
 	if err := i.blockIter.initHandle(r.Compare, h, r.Properties.GlobalSeqNum); err != nil {
 		return nil, err
 	}
