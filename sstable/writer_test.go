@@ -292,9 +292,9 @@ func TestParallelWriterErrorProp(t *testing.T) {
 	require.Equal(t, err.Error(), "write queue write error")
 }
 
-func TestSizeEstimate(t *testing.T) {
+func TestWriterSizeEstimate(t *testing.T) {
 	var sizeEstimate sizeEstimate
-	datadriven.RunTest(t, "testdata/size_estimate",
+	datadriven.RunTest(t, "testdata/writer_size_estimate",
 		func(td *datadriven.TestData) string {
 			switch td.Cmd {
 			case "init":

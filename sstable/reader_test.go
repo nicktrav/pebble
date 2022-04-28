@@ -915,6 +915,43 @@ func TestReader_TableFormat(t *testing.T) {
 	}
 }
 
+func TestReader_EstimateSize(t *testing.T) {
+	var r *Reader
+	datadriven.RunTest(t, "testdata/reader_size_estimate", func(td *datadriven.TestData) string {
+		var err error
+		switch td.Cmd {
+		case "build":
+			if r != nil {
+				_ = r.Close()
+			}
+			_, r, err = runBuildCmd(td, &WriterOptions{TableFormat: TableFormatMax}, 0)
+			if err != nil {
+				return err.Error()
+			}
+			l, err := r.Layout()
+			if err != nil {
+				return err.Error()
+			}
+			var b bytes.Buffer
+			l.Describe(&b, false /* verbose */, r, nil)
+			return b.String()
+		case "estimate":
+			var start, end []byte
+			if len(td.CmdArgs) == 2 {
+				start = []byte(td.CmdArgs[0].Key)
+				end = []byte(td.CmdArgs[1].Key)
+			}
+			size, err := r.EstimateDiskUsage(start, end)
+			if err != nil {
+				return err.Error()
+			}
+			return strconv.FormatUint(size, 10)
+		default:
+			return fmt.Sprintf("unknown command: %s", td.Cmd)
+		}
+	})
+}
+
 func buildTestTable(
 	t *testing.T, numEntries uint64, blockSize, indexBlockSize int, compression Compression,
 ) *Reader {

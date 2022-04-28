@@ -1,0 +1,124 @@
+# Single block.
+
+build
+b.SET.1:b
+c.SET.1:c
+----
+         0  data (29)
+        34  index (22)
+        61  properties (678)
+       744  meta-index (32)
+       781  footer (53)
+       834  EOF
+
+estimate b b
+----
+34
+
+estimate b c
+----
+34
+
+estimate c c
+----
+34
+
+# The estimate assumes that there is at least partial overlap. As a < b, we
+# count the first block.
+estimate a a
+----
+34
+
+# The block is counted despite d > c, as the first index entry >= d is
+# succ(c) == d, which triggers counting the size of the block.
+estimate d z
+----
+34
+
+# No overlap.
+estimate dd z
+----
+0
+
+# Multi-block. Single level index.
+
+build block-size=1 index-block-size=1024
+a.SET.1:a
+b.SET.1:b
+c.SET.1:c
+----
+         0  data (21)
+        26  data (21)
+        52  data (21)
+        78  index (47)
+       130  properties (678)
+       813  meta-index (33)
+       851  footer (53)
+       904  EOF
+
+estimate a a
+----
+26
+
+estimate b b
+----
+26
+
+estimate c c
+----
+26
+
+estimate a c
+----
+78
+
+estimate a z
+----
+78
+
+estimate b z
+----
+52
+
+# Multi-block. Two level index. The test cases are the same.
+
+build block-size=1 index-block-size=1
+a.SET.1:a
+b.SET.1:b
+c.SET.1:c
+----
+         0  data (21)
+        26  data (21)
+        52  data (21)
+        78  index (22)
+       105  index (22)
+       132  index (22)
+       159  top-index (50)
+       214  properties (717)
+       936  meta-index (33)
+       974  footer (53)
+      1027  EOF
+
+estimate a a
+----
+26
+
+estimate b b
+----
+26
+
+estimate c c
+----
+26
+
+estimate a c
+----
+78
+
+estimate a z
+----
+78
+
+estimate b z
+----
+52
