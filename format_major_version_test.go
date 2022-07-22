@@ -43,6 +43,10 @@ func TestRatchetFormat(t *testing.T) {
 	require.Equal(t, FormatBlockPropertyCollector, d.FormatMajorVersion())
 	require.NoError(t, d.RatchetFormatMajorVersion(FormatRangeKeys))
 	require.Equal(t, FormatRangeKeys, d.FormatMajorVersion())
+	require.NoError(t, d.RatchetFormatMajorVersion(FormatPreBlockPropertiesMarked))
+	require.Equal(t, FormatPreBlockPropertiesMarked, d.FormatMajorVersion())
+	require.NoError(t, d.RatchetFormatMajorVersion(FormatTablePropertiesMarkedCompacted))
+	require.Equal(t, FormatTablePropertiesMarkedCompacted, d.FormatMajorVersion())
 	require.NoError(t, d.Close())
 
 	// If we Open the database again, leaving the default format, the
@@ -190,15 +194,18 @@ func TestFormatMajorVersions_TableFormat(t *testing.T) {
 	// fixture is intentionally verbose.
 
 	m := map[FormatMajorVersion]sstable.TableFormat{
-		FormatDefault:                 sstable.TableFormatRocksDBv2,
-		FormatMostCompatible:          sstable.TableFormatRocksDBv2,
-		formatVersionedManifestMarker: sstable.TableFormatRocksDBv2,
-		FormatVersioned:               sstable.TableFormatRocksDBv2,
-		FormatSetWithDelete:           sstable.TableFormatRocksDBv2,
-		FormatBlockPropertyCollector:  sstable.TableFormatPebblev1,
-		FormatSplitUserKeysMarked:     sstable.TableFormatPebblev1,
-		FormatMarkedCompacted:         sstable.TableFormatPebblev1,
-		FormatRangeKeys:               sstable.TableFormatPebblev2,
+		FormatDefault:                        sstable.TableFormatRocksDBv2,
+		FormatMostCompatible:                 sstable.TableFormatRocksDBv2,
+		formatVersionedManifestMarker:        sstable.TableFormatRocksDBv2,
+		FormatVersioned:                      sstable.TableFormatRocksDBv2,
+		FormatSetWithDelete:                  sstable.TableFormatRocksDBv2,
+		FormatBlockPropertyCollector:         sstable.TableFormatPebblev1,
+		FormatSplitUserKeysMarked:            sstable.TableFormatPebblev1,
+		FormatSplitUserKeysMarkedCompacted:   sstable.TableFormatPebblev1,
+		FormatRangeKeys:                      sstable.TableFormatPebblev2,
+		FormatMinTableFormatPebblev1:         sstable.TableFormatPebblev2,
+		FormatPreBlockPropertiesMarked:       sstable.TableFormatPebblev2,
+		FormatTablePropertiesMarkedCompacted: sstable.TableFormatPebblev2,
 	}
 
 	// Valid versions.
