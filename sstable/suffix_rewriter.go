@@ -56,11 +56,6 @@ func rewriteKeySuffixesInBlocks(
 	w := NewWriter(out, o)
 	defer w.Close()
 
-	for _, c := range w.propCollectors {
-		if _, ok := c.(SuffixReplaceableTableCollector); !ok {
-			return nil, errors.Errorf("property collector %s does not support suffix replacement", c.Name())
-		}
-	}
 	for _, c := range w.blockPropCollectors {
 		if _, ok := c.(SuffixReplaceableBlockCollector); !ok {
 			return nil, errors.Errorf("block property collector %s does not support suffix replacement", c.Name())
@@ -252,12 +247,6 @@ func rewriteDataBlocksToWriter(
 	close(errCh)
 	if err, ok := <-errCh; ok {
 		return err
-	}
-
-	for _, p := range w.propCollectors {
-		if err := p.(SuffixReplaceableTableCollector).UpdateKeySuffixes(r.Properties.UserProperties, from, to); err != nil {
-			return err
-		}
 	}
 
 	var decoder blockPropertiesDecoder

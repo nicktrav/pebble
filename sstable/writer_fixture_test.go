@@ -39,24 +39,6 @@ const (
 	smallIndexBlockSize   = 128
 )
 
-type keyCountPropertyCollector struct {
-	count int
-}
-
-func (c *keyCountPropertyCollector) Add(key InternalKey, value []byte) error {
-	c.count++
-	return nil
-}
-
-func (c *keyCountPropertyCollector) Finish(userProps map[string]string) error {
-	userProps["test.key-count"] = fmt.Sprint(c.count)
-	return nil
-}
-
-func (c *keyCountPropertyCollector) Name() string {
-	return "KeyCountPropertyCollector"
-}
-
 var fixtureComparer = func() *Comparer {
 	c := *base.DefaultComparer
 	// NB: this is named as such only to match the built-in RocksDB comparer.
@@ -87,43 +69,30 @@ func (o fixtureOpts) String() string {
 }
 
 var fixtures = map[fixtureOpts]struct {
-	filename      string
-	comparer      *Comparer
-	propCollector func() TablePropertyCollector
+	filename string
+	comparer *Comparer
 }{
 	{SnappyCompression, noFullKeyBloom, noPrefixFilter, defaultIndexBlockSize}: {
 		"testdata/h.sst", nil,
-		func() TablePropertyCollector {
-			return &keyCountPropertyCollector{}
-		},
 	},
 	{SnappyCompression, fullKeyBloom, noPrefixFilter, defaultIndexBlockSize}: {
-		"testdata/h.table-bloom.sst", nil, nil,
+		"testdata/h.table-bloom.sst", nil,
 	},
 	{NoCompression, noFullKeyBloom, noPrefixFilter, defaultIndexBlockSize}: {
 		"testdata/h.no-compression.sst", nil,
-		func() TablePropertyCollector {
-			return &keyCountPropertyCollector{}
-		},
 	},
 	{NoCompression, fullKeyBloom, noPrefixFilter, defaultIndexBlockSize}: {
-		"testdata/h.table-bloom.no-compression.sst", nil, nil,
+		"testdata/h.table-bloom.no-compression.sst", nil,
 	},
 	{NoCompression, noFullKeyBloom, prefixFilter, defaultIndexBlockSize}: {
 		"testdata/h.table-bloom.no-compression.prefix_extractor.no_whole_key_filter.sst",
-		fixtureComparer, nil,
+		fixtureComparer,
 	},
 	{NoCompression, noFullKeyBloom, noPrefixFilter, smallIndexBlockSize}: {
 		"testdata/h.no-compression.two_level_index.sst", nil,
-		func() TablePropertyCollector {
-			return &keyCountPropertyCollector{}
-		},
 	},
 	{ZstdCompression, noFullKeyBloom, noPrefixFilter, defaultIndexBlockSize}: {
 		"testdata/h.zstd-compression.sst", nil,
-		func() TablePropertyCollector {
-			return &keyCountPropertyCollector{}
-		},
 	},
 }
 
@@ -148,7 +117,7 @@ func runTestFixtureOutput(opts fixtureOpts) error {
 		return err
 	}
 
-	f, err := build(compression, fp, ftype, fixture.comparer, fixture.propCollector, 2048, opts.indexBlockSize)
+	f, err := build(compression, fp, ftype, fixture.comparer, 2048, opts.indexBlockSize)
 	if err != nil {
 		return err
 	}

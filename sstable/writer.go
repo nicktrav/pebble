@@ -174,7 +174,6 @@ type Writer struct {
 	rangeKeyBlock       blockWriter
 	topLevelIndexBlock  blockWriter
 	props               Properties
-	propCollectors      []TablePropertyCollector
 	blockPropCollectors []BlockPropertyCollector
 	blockPropsEncoder   blockPropertiesEncoder
 	// filter accumulates the filter block. If populated, the filter ingests
@@ -720,12 +719,6 @@ func (w *Writer) addPoint(key InternalKey, value []byte) error {
 		return err
 	}
 
-	for i := range w.propCollectors {
-		if err := w.propCollectors[i].Add(key, value); err != nil {
-			w.err = err
-			return err
-		}
-	}
 	for i := range w.blockPropCollectors {
 		if err := w.blockPropCollectors[i].Add(key, value); err != nil {
 			w.err = err
@@ -808,13 +801,6 @@ func (w *Writer) addTombstone(key InternalKey, value []byte) error {
 	if key.Trailer == InternalKeyRangeDeleteSentinel {
 		w.err = errors.Errorf("pebble: cannot add range delete sentinel: %s", key.Pretty(w.formatKey))
 		return w.err
-	}
-
-	for i := range w.propCollectors {
-		if err := w.propCollectors[i].Add(key, value); err != nil {
-			w.err = err
-			return err
-		}
 	}
 
 	w.meta.updateSeqNum(key.SeqNum())
@@ -1692,12 +1678,6 @@ func (w *Writer) Close() (err error) {
 
 	{
 		userProps := make(map[string]string)
-		for i := range w.propCollectors {
-			if err := w.propCollectors[i].Finish(userProps); err != nil {
-				w.err = err
-				return err
-			}
-		}
 		for i := range w.blockPropCollectors {
 			scratch := w.blockPropsEncoder.getScratchForProp()
 			// Place the shortID in the first byte.
@@ -1969,19 +1949,9 @@ func NewWriter(f writeCloseSyncer, o WriterOptions, extraOpts ...WriterOption) *
 	w.props.PropertyCollectorNames = "[]"
 	w.props.ExternalFormatVersion = rocksDBExternalFormatVersion
 
-	if len(o.TablePropertyCollectors) > 0 || len(o.BlockPropertyCollectors) > 0 {
+	if len(o.BlockPropertyCollectors) > 0 {
 		var buf bytes.Buffer
 		buf.WriteString("[")
-		if len(o.TablePropertyCollectors) > 0 {
-			w.propCollectors = make([]TablePropertyCollector, len(o.TablePropertyCollectors))
-			for i := range o.TablePropertyCollectors {
-				w.propCollectors[i] = o.TablePropertyCollectors[i]()
-				if i > 0 {
-					buf.WriteString(",")
-				}
-				buf.WriteString(w.propCollectors[i].Name())
-			}
-		}
 		if len(o.BlockPropertyCollectors) > 0 {
 			// shortID is a uint8, so we cannot exceed that number of block
 			// property collectors.
@@ -1994,7 +1964,7 @@ func NewWriter(f writeCloseSyncer, o WriterOptions, extraOpts ...WriterOption) *
 			w.blockPropCollectors = make([]BlockPropertyCollector, len(o.BlockPropertyCollectors))
 			for i := range o.BlockPropertyCollectors {
 				w.blockPropCollectors[i] = o.BlockPropertyCollectors[i]()
-				if i > 0 || len(o.TablePropertyCollectors) > 0 {
+				if i > 0 {
 					buf.WriteString(",")
 				}
 				buf.WriteString(w.blockPropCollectors[i].Name())

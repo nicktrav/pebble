@@ -568,26 +568,6 @@ func TestIterator(t *testing.T) {
 	})
 }
 
-type minSeqNumPropertyCollector struct {
-	minSeqNum uint64
-}
-
-func (c *minSeqNumPropertyCollector) Add(key InternalKey, value []byte) error {
-	if c.minSeqNum == 0 || c.minSeqNum > key.SeqNum() {
-		c.minSeqNum = key.SeqNum()
-	}
-	return nil
-}
-
-func (c *minSeqNumPropertyCollector) Finish(userProps map[string]string) error {
-	userProps["test.min-seq-num"] = fmt.Sprint(c.minSeqNum)
-	return nil
-}
-
-func (c *minSeqNumPropertyCollector) Name() string {
-	return "minSeqNumPropertyCollector"
-}
-
 func TestReadSampling(t *testing.T) {
 	var d *DB
 	defer func() {
@@ -617,14 +597,8 @@ func TestReadSampling(t *testing.T) {
 				}
 			}
 
-			opts := &Options{}
-			opts.TablePropertyCollectors = append(opts.TablePropertyCollectors,
-				func() TablePropertyCollector {
-					return &minSeqNumPropertyCollector{}
-				})
-
 			var err error
-			if d, err = runDBDefineCmd(td, opts); err != nil {
+			if d, err = runDBDefineCmd(td, &Options{}); err != nil {
 				return err.Error()
 			}
 
@@ -762,83 +736,6 @@ func TestReadSampling(t *testing.T) {
 	})
 }
 
-func TestIteratorTableFilter(t *testing.T) {
-	var d *DB
-	defer func() {
-		if d != nil {
-			require.NoError(t, d.Close())
-		}
-	}()
-
-	datadriven.RunTest(t, "testdata/iterator_table_filter", func(td *datadriven.TestData) string {
-		switch td.Cmd {
-		case "define":
-			if d != nil {
-				if err := d.Close(); err != nil {
-					return err.Error()
-				}
-			}
-
-			opts := &Options{}
-			opts.TablePropertyCollectors = append(opts.TablePropertyCollectors,
-				func() TablePropertyCollector {
-					return &minSeqNumPropertyCollector{}
-				})
-
-			var err error
-			if d, err = runDBDefineCmd(td, opts); err != nil {
-				return err.Error()
-			}
-
-			d.mu.Lock()
-			// Disable the "dynamic base level" code for this test.
-			d.mu.versions.picker.forceBaseLevel1()
-			s := d.mu.versions.currentVersion().String()
-			d.mu.Unlock()
-			return s
-
-		case "iter":
-			// We're using an iterator table filter to approximate what is done by
-			// snapshots.
-			iterOpts := &IterOptions{}
-			for _, arg := range td.CmdArgs {
-				if len(arg.Vals) != 1 {
-					return fmt.Sprintf("%s: %s=<value>", td.Cmd, arg.Key)
-				}
-				switch arg.Key {
-				case "filter":
-					seqNum, err := strconv.ParseUint(arg.Vals[0], 10, 64)
-					if err != nil {
-						return err.Error()
-					}
-					iterOpts.TableFilter = func(userProps map[string]string) bool {
-						minSeqNum, err := strconv.ParseUint(userProps["test.min-seq-num"], 10, 64)
-						if err != nil {
-							return true
-						}
-						return minSeqNum < seqNum
-					}
-				default:
-					return fmt.Sprintf("%s: unknown arg: %s", td.Cmd, arg.Key)
-				}
-			}
-
-			// TODO(peter): runDBDefineCmd doesn't properly update the visible
-			// sequence number. So we have to use a snapshot with a very large
-			// sequence number, otherwise the DB appears empty.
-			snap := Snapshot{
-				db:     d,
-				seqNum: InternalKeySeqNumMax,
-			}
-			iter := snap.NewIter(iterOpts)
-			return runIterCmd(td, iter, true)
-
-		default:
-			return fmt.Sprintf("unknown command: %s", td.Cmd)
-		}
-	})
-}
-
 func TestIteratorNextPrev(t *testing.T) {
 	var mem vfs.FS
 	var d *DB
@@ -963,14 +860,8 @@ func TestIteratorSeekOpt(t *testing.T) {
 			seekGEUsingNext = 0
 			seekPrefixGEUsingNext = 0
 
-			opts := &Options{}
-			opts.TablePropertyCollectors = append(opts.TablePropertyCollectors,
-				func() TablePropertyCollector {
-					return &minSeqNumPropertyCollector{}
-				})
-
 			var err error
-			if d, err = runDBDefineCmd(td, opts); err != nil {
+			if d, err = runDBDefineCmd(td, &Options{}); err != nil {
 				return err.Error()
 			}
 

@@ -339,7 +339,6 @@ func build(
 	fp FilterPolicy,
 	ftype FilterType,
 	comparer *Comparer,
-	propCollector func() TablePropertyCollector,
 	blockSize int,
 	indexBlockSize int,
 ) (vfs.File, error) {
@@ -368,9 +367,6 @@ func build(
 		FilterType:     ftype,
 		IndexBlockSize: indexBlockSize,
 		MergerName:     "nullptr",
-	}
-	if propCollector != nil {
-		writerOpts.TablePropertyCollectors = append(writerOpts.TablePropertyCollectors, propCollector)
 	}
 
 	w := NewWriter(f0, writerOpts)
@@ -585,8 +581,7 @@ func TestWriterRoundTrip(t *testing.T) {
 				"bloom10bit": bloom.FilterPolicy(10),
 			} {
 				t.Run(fmt.Sprintf("bloom=%s", name), func(t *testing.T) {
-					f, err := build(DefaultCompression, fp, TableFilter,
-						nil, nil, blockSize, indexBlockSize)
+					f, err := build(DefaultCompression, fp, TableFilter, nil, blockSize, indexBlockSize)
 					require.NoError(t, err)
 
 					// Check that we can read a freshly made table.
@@ -685,8 +680,7 @@ func TestReaderGlobalSeqNum(t *testing.T) {
 }
 
 func TestMetaIndexEntriesSorted(t *testing.T) {
-	f, err := build(DefaultCompression, nil, /* filter policy */
-		TableFilter, nil, nil, 4096, 4096)
+	f, err := build(DefaultCompression, nil /* filter policy */, TableFilter, nil, 4096, 4096)
 	require.NoError(t, err)
 
 	r, err := NewReader(f, ReaderOptions{})
@@ -803,56 +797,5 @@ func TestReadFooter(t *testing.T) {
 				t.Fatalf("expected %q, but found %v", c.expected, err)
 			}
 		})
-	}
-}
-
-type errorPropCollector struct{}
-
-func (errorPropCollector) Add(key InternalKey, _ []byte) error {
-	return errors.Errorf("add %s failed", key)
-}
-
-func (errorPropCollector) Finish(_ map[string]string) error {
-	return errors.Errorf("finish failed")
-}
-
-func (errorPropCollector) Name() string {
-	return "errorPropCollector"
-}
-
-func TestTablePropertyCollectorErrors(t *testing.T) {
-
-	var testcases map[string]func(w *Writer) error = map[string]func(w *Writer) error{
-		"add a#0,1 failed": func(w *Writer) error {
-			return w.Set([]byte("a"), []byte("b"))
-		},
-		"add c#0,0 failed": func(w *Writer) error {
-			return w.Delete([]byte("c"))
-		},
-		"add d#0,15 failed": func(w *Writer) error {
-			return w.DeleteRange([]byte("d"), []byte("e"))
-		},
-		"add f#0,2 failed": func(w *Writer) error {
-			return w.Merge([]byte("f"), []byte("g"))
-		},
-		"finish failed": func(w *Writer) error {
-			return w.Close()
-		},
-	}
-
-	for e, fun := range testcases {
-		mem := vfs.NewMem()
-		f, err := mem.Create("foo")
-		require.NoError(t, err)
-
-		var opts WriterOptions
-		opts.TablePropertyCollectors = append(opts.TablePropertyCollectors,
-			func() TablePropertyCollector {
-				return errorPropCollector{}
-			})
-
-		w := NewWriter(f, opts)
-
-		require.Regexp(t, e, fun(w))
 	}
 }
