@@ -84,6 +84,20 @@ jobs:
 
     - run: CGO_ENABLED=0 make test TAGS=
 
+  linux-32-ibit:
+    name: go-linux-32-bit
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: "1.18"
+      env:
+        GOARCH=i386
+      run: go build -v ./...
+
   darwin:
     name: go-macos
     runs-on: macos-11
