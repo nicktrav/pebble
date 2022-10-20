@@ -4,7 +4,14 @@
 
 package pebble
 
-import "sync/atomic"
+import (
+	"bytes"
+	"fmt"
+	"runtime/debug"
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
 // readState encapsulates the state needed for reading (the current version and
 // list of memtables). Loading the readState is done without grabbing
@@ -23,10 +30,52 @@ type readState struct {
 	refcnt    int32
 	current   *version
 	memtables flushableList
+
+	mu2    sync.RWMutex
+	refs   [][]byte
+	unrefs [][]byte
+}
+
+func (s *readState) startReporting() {
+	t := time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			<-t.C
+			var b bytes.Buffer
+			_, _ = fmt.Fprintf(&b, "--- readState: %p, refCnt = %d\n",
+				s, atomic.LoadInt32(&s.refcnt),
+			)
+
+			s.mu2.RLock()
+			_, _ = fmt.Fprintf(&b, "refs (+%d)\n", len(s.refs))
+			for _, stack := range s.refs {
+				b.Write(stack)
+				b.WriteRune('\n')
+			}
+			_, _ = fmt.Fprintf(&b, "unrefs (-%d)\n", len(s.unrefs))
+			for _, stack := range s.unrefs {
+				b.Write(stack)
+				b.WriteRune('\n')
+			}
+			s.mu2.RUnlock()
+
+			if atomic.LoadInt32(&s.refcnt) == 0 {
+				_, _ = fmt.Fprintf(&b, "closing readState %p\n", s)
+				fmt.Println(b.String())
+				return
+			}
+			fmt.Println(b.String())
+		}
+	}()
 }
 
 // ref adds a reference to the readState.
 func (s *readState) ref() {
+	s.mu2.Lock()
+	b := []byte(time.Now().String() + "\n")
+	b = append(b, debug.Stack()...)
+	s.refs = append(s.refs, b)
+	s.mu2.Unlock()
 	atomic.AddInt32(&s.refcnt, 1)
 }
 
@@ -35,6 +84,11 @@ func (s *readState) ref() {
 // is NOT held as version.unref() will acquire it. See unrefLocked() if DB.mu
 // is held by the caller.
 func (s *readState) unref() {
+	s.mu2.Lock()
+	b := []byte(time.Now().String() + "\n")
+	b = append(b, debug.Stack()...)
+	s.unrefs = append(s.unrefs, b)
+	s.mu2.Unlock()
 	if atomic.AddInt32(&s.refcnt, -1) != 0 {
 		return
 	}
@@ -53,6 +107,11 @@ func (s *readState) unref() {
 // released. Requires DB.mu is held as version.unrefLocked() requires it. See
 // unref() if DB.mu is NOT held by the caller.
 func (s *readState) unrefLocked() {
+	s.mu2.Lock()
+	b := []byte(time.Now().String() + "\n")
+	b = append(b, debug.Stack()...)
+	s.unrefs = append(s.unrefs, b)
+	s.mu2.Unlock()
 	if atomic.AddInt32(&s.refcnt, -1) != 0 {
 		return
 	}
@@ -83,10 +142,11 @@ func (d *DB) loadReadState() *readState {
 func (d *DB) updateReadStateLocked(checker func(*DB) error) {
 	s := &readState{
 		db:        d,
-		refcnt:    1,
 		current:   d.mu.versions.currentVersion(),
 		memtables: d.mu.mem.queue,
 	}
+	s.ref()
+	s.startReporting()
 	s.current.Ref()
 	for _, mem := range s.memtables {
 		mem.readerRef()
