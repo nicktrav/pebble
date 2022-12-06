@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cockroachdb/errors"
 )
 
 const (
@@ -175,6 +177,7 @@ type diskHealthCheckingFS struct {
 	fs                FS
 	mu                struct {
 		sync.Mutex
+		closed        bool
 		tickerRunning bool
 		stopper       chan struct{}
 		inflight      []*slot
@@ -322,11 +325,12 @@ func (d *diskHealthCheckingFS) startTickerLocked() {
 }
 
 // Close implements io.Closer. Close stops the long-running goroutine that
-// monitors for slow filesystem metadata operations. Close may be called
-// multiple times. If the filesystem is used after Close has been called, a new
-// long-running goroutine will be created.
+// monitors for slow filesystem metadata operations.
 func (d *diskHealthCheckingFS) Close() error {
 	d.mu.Lock()
+	if d.mu.closed {
+		return errors.New("FS is already closed")
+	}
 	if !d.mu.tickerRunning {
 		// Nothing to stop.
 		d.mu.Unlock()
@@ -341,6 +345,7 @@ func (d *diskHealthCheckingFS) Close() error {
 	stopper := d.mu.stopper
 	d.mu.stopper = make(chan struct{})
 	d.mu.tickerRunning = false
+	d.mu.closed = true
 	d.mu.Unlock()
 
 	// Ask the long-running goroutine to stop. This is a synchronous channel
@@ -350,8 +355,20 @@ func (d *diskHealthCheckingFS) Close() error {
 	return nil
 }
 
+func (d *diskHealthCheckingFS) checkClosed() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.mu.closed {
+		return errors.New("use of a closed FS")
+	}
+	return nil
+}
+
 // Create implements the FS interface.
 func (d *diskHealthCheckingFS) Create(name string) (File, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	var f File
 	var err error
 	d.timeFilesystemOp(name, func() {
@@ -372,11 +389,17 @@ func (d *diskHealthCheckingFS) Create(name string) (File, error) {
 
 // GetDiskUsage implements the FS interface.
 func (d *diskHealthCheckingFS) GetDiskUsage(path string) (DiskUsage, error) {
+	if err := d.checkClosed(); err != nil {
+		return DiskUsage{}, err
+	}
 	return d.fs.GetDiskUsage(path)
 }
 
 // Link implements the FS interface.
 func (d *diskHealthCheckingFS) Link(oldname, newname string) error {
+	if err := d.checkClosed(); err != nil {
+		return err
+	}
 	var err error
 	d.timeFilesystemOp(newname, func() {
 		err = d.fs.Link(oldname, newname)
@@ -386,16 +409,25 @@ func (d *diskHealthCheckingFS) Link(oldname, newname string) error {
 
 // List implements the FS interface.
 func (d *diskHealthCheckingFS) List(dir string) ([]string, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	return d.fs.List(dir)
 }
 
 // Lock implements the FS interface.
 func (d *diskHealthCheckingFS) Lock(name string) (io.Closer, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	return d.fs.Lock(name)
 }
 
 // MkdirAll implements the FS interface.
 func (d *diskHealthCheckingFS) MkdirAll(dir string, perm os.FileMode) error {
+	if err := d.checkClosed(); err != nil {
+		return err
+	}
 	var err error
 	d.timeFilesystemOp(dir, func() {
 		err = d.fs.MkdirAll(dir, perm)
@@ -405,11 +437,17 @@ func (d *diskHealthCheckingFS) MkdirAll(dir string, perm os.FileMode) error {
 
 // Open implements the FS interface.
 func (d *diskHealthCheckingFS) Open(name string, opts ...OpenOption) (File, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	return d.fs.Open(name, opts...)
 }
 
 // OpenDir implements the FS interface.
 func (d *diskHealthCheckingFS) OpenDir(name string) (File, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	f, err := d.fs.OpenDir(name)
 	if err != nil {
 		return f, err
@@ -440,6 +478,9 @@ func (d *diskHealthCheckingFS) PathDir(path string) string {
 
 // Remove implements the FS interface.
 func (d *diskHealthCheckingFS) Remove(name string) error {
+	if err := d.checkClosed(); err != nil {
+		return err
+	}
 	var err error
 	d.timeFilesystemOp(name, func() {
 		err = d.fs.Remove(name)
@@ -449,6 +490,9 @@ func (d *diskHealthCheckingFS) Remove(name string) error {
 
 // RemoveAll implements the FS interface.
 func (d *diskHealthCheckingFS) RemoveAll(name string) error {
+	if err := d.checkClosed(); err != nil {
+		return err
+	}
 	var err error
 	d.timeFilesystemOp(name, func() {
 		err = d.fs.RemoveAll(name)
@@ -458,6 +502,9 @@ func (d *diskHealthCheckingFS) RemoveAll(name string) error {
 
 // Rename implements the FS interface.
 func (d *diskHealthCheckingFS) Rename(oldname, newname string) error {
+	if err := d.checkClosed(); err != nil {
+		return err
+	}
 	var err error
 	d.timeFilesystemOp(newname, func() {
 		err = d.fs.Rename(oldname, newname)
@@ -467,6 +514,9 @@ func (d *diskHealthCheckingFS) Rename(oldname, newname string) error {
 
 // ReuseForWrite implements the FS interface.
 func (d *diskHealthCheckingFS) ReuseForWrite(oldname, newname string) (File, error) {
+	if err := d.checkClosed(); err != nil {
+		return nil, err
+	}
 	var f File
 	var err error
 	d.timeFilesystemOp(newname, func() {
